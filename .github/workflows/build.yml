@@ -2,15 +2,46 @@ name: Test and release portable ZIPs
 on:
   push:
     tags: ['v*']
-  pull_request:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build and publish
+        required: true
+        type: string
 permissions:
   contents: read
 concurrency:
   group: portable-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  draft:
+    name: Prepare draft release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+      - name: Validate version and create draft
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          node -e 'const fs=require("fs");const tag=process.env.RELEASE_TAG;if(!/^v[0-9]+\.[0-9]+\.[0-9]+$/.test(tag)||tag!=="v"+require("./package.json").version)throw Error("Tag must match package.json version");fs.appendFileSync(process.env.GITHUB_OUTPUT,"tag="+tag+"\n")'
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --draft --verify-tag --title "DropPilot $RELEASE_TAG" --generate-notes
+          fi
   package:
+    needs: draft
+    permissions:
+      contents: write
     name: ${{ matrix.platform }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
@@ -35,6 +66,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ${{ needs.draft.outputs.tag }}
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
@@ -42,10 +74,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      - name: Check release tag matches package version
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: node -e 'if(process.env.GITHUB_REF_NAME !== "v"+require("./package.json").version)throw new Error("Tag must match package.json version")'
       - run: npm run prepare:browser
       - name: Build portable archive
         run: npx --no-install electron-builder --${{ matrix.platform }} zip --${{ matrix.arch }} --publish never
@@ -73,37 +101,27 @@ jobs:
           DROP_PILOT_PACKAGE_DIR: ${{ runner.temp }}/DropPilot-check
       - name: Generate checksum
         run: node scripts/checksum.mjs
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: portable-${{ matrix.platform }}-${{ matrix.arch }}
-          path: |
-            dist/*.zip
-            dist/*.sha256
-          compression-level: 0
-          if-no-files-found: error
-          retention-days: 14
+      - name: Upload tested ZIP directly to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.draft.outputs.tag }}
+        shell: bash
+        run: gh release upload "$RELEASE_TAG" dist/*.zip dist/*.sha256 --clobber
   release:
-    name: Publish release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: package
+    name: Publish completed release
+    needs: [draft, package]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          pattern: portable-*
-          path: release-assets
-          merge-multiple: true
-      - name: Publish all tested archives and checksums
+      - name: Verify all assets and publish
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.draft.outputs.tag }}
         shell: bash
         run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" release-assets/* --clobber
-          else
-            gh release create "$RELEASE_TAG" release-assets/* --verify-tag --title "DropPilot $RELEASE_TAG" --generate-notes
-          fi
+          gh release view "$RELEASE_TAG" --json assets > assets.json
+          node -e 'const a=require("./assets.json").assets;for(const p of ["win-x64","linux-x64","mac-x64","mac-arm64"]){const n="DropPilot-"+process.env.RELEASE_TAG.slice(1)+"-"+p+".zip";if(!a.some(x=>x.name===n)||!a.some(x=>x.name===n+".sha256"))throw Error("Missing assets for "+p)}'
+          gh release edit "$RELEASE_TAG" --draft=false --latest

@@ -50,16 +50,16 @@ npm run dist:linux  # Linux x64: ZIP completo
 npm run dist:mac    # macOS: ZIP para la arquitectura del equipo
 ~~~
 
-Los resultados quedan en dist/. Cada compilación descarga Chromium para su sistema y arquitectura. El flujo .github/workflows/build.yml ejecuta las pruebas, genera cuatro ZIP (Windows x64, Linux x64, macOS Intel y Apple Silicon), los extrae y comprueba que la aplicación abre desde el archivo distribuido. Después genera SHA256 y sube los artefactos. Se ejecuta en pull requests, etiquetas v* o manualmente. Las Actions están fijadas por SHA y solo el trabajo de publicación tiene permiso de escritura.
+Los resultados quedan en dist/. Cada compilación descarga Chromium para su sistema y arquitectura. El flujo .github/workflows/build.yml ejecuta las pruebas, genera cuatro ZIP (Windows x64, Linux x64, macOS Intel y Apple Silicon), los extrae y comprueba que la aplicación abre desde el archivo distribuido. Después genera SHA256 y sube cada ZIP directamente a una Release en borrador. Se ejecuta en etiquetas v* o manualmente indicando una etiqueta existente. Las Actions están fijadas por SHA; los trabajos de publicación usan contents: write. No usa almacenamiento de artefactos de Actions.
 
 Para publicar una nueva versión, actualiza version en package.json y package-lock.json, haz commit y sube una etiqueta coincidente:
 
 ~~~sh
-git tag v0.1.3
-git push origin v0.1.3
+git tag v0.1.4
+git push origin v0.1.4
 ~~~
 
-Solo las etiquetas crean Releases automáticamente, después de superar los cuatro empaquetados y las pruebas de los ZIP extraídos. Una ejecución manual o un pull request genera artefactos sin publicar una Release. El flujo usa GITHUB_TOKEN; no requiere claves personales ni certificados. Una repetición actualiza los archivos de la misma Release.
+Solo las etiquetas crean Releases automáticamente, después de superar los cuatro empaquetados y las pruebas de los ZIP extraídos. Una ejecución manual requiere indicar una etiqueta existente y sigue el mismo proceso de publicación. Si falla una plataforma, la Release permanece en borrador y no se publica. El flujo usa GITHUB_TOKEN; no requiere claves personales ni certificados. Una repetición actualiza los archivos de la misma Release.
 
 Los paquetes no están firmados ni notarizados. Los sistemas operativos pueden pedir autorización para abrirlos. Un mismo binario no puede ejecutarse en los tres sistemas; se publica un ZIP independiente por sistema y arquitectura.
 

@@ -1,6 +1,6 @@
 {
   "name": "droppilot",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Planificador local y configurable de campañas de drops",
   "private": true,
   "type": "module",

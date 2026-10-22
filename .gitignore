@@ -1,0 +1,10 @@
+node_modules/
+.browsers/
+dist/
+coverage/
+*.log
+.DS_Store
+Thumbs.db
+*.profile/
+*.session
+*.session.json

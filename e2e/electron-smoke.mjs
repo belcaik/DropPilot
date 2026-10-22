@@ -1,0 +1,41 @@
+// Optional desktop integration check: real Electron + IPC, isolated disposable data.
+import {_electron} from 'playwright';
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import {fileURLToPath} from 'node:url';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const taskData=await fs.mkdtemp(path.join(os.tmpdir(),'droppilot-desktop-test-'));
+const env={...process.env,DROP_PILOT_TEST_DATA_DIR:taskData};
+delete env.ELECTRON_RUN_AS_NODE;
+const executablePath=process.platform==='win32'?path.join(root,'node_modules/electron/dist/electron.exe'):process.platform==='darwin'?path.join(root,'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron'):path.join(root,'node_modules/electron/dist/electron');
+let app;
+try{
+ app=await _electron.launch({executablePath,args:[root],env,timeout:45000});
+ const page=await app.firstWindow();const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.locator('#pageTitle').waitFor();
+ const initial=await page.evaluate(()=>window.dropPilot.invoke('getState'));
+ assert.equal(initial.channels.length,0);
+ await page.locator('#channelText').fill('example, second_channel');
+ await page.locator('#addForm button[type="submit"]').click();
+ await page.locator('#channelRows tr').nth(1).waitFor();
+ assert.equal(await page.locator('#channelCount').textContent(),'2');
+ const state=await page.evaluate(()=>window.dropPilot.invoke('getState'));
+ const id=state.channels[0].id;
+ await page.evaluate(id=>window.dropPilot.invoke('setRewards',{id,rewardIds:['Test Skin']}),id);
+ await page.evaluate(id=>window.dropPilot.invoke('markCompleted',{id,completed:true}),id);
+ await page.locator('.badge.done').first().waitFor();
+ await page.locator('[data-tab="settings"]').click();
+ await page.locator('[name="pollSeconds"]').fill('60');
+ await page.locator('#settingsForm button[type="submit"]').click();
+ await page.locator('#notice').filter({hasText:'Configuración guardada'}).waitFor();
+ assert.equal((await page.evaluate(()=>window.dropPilot.invoke('getState'))).settings.pollSeconds,60);
+ assert.equal(await page.evaluate(async()=>{try{await window.dropPilot.invoke('addChannels',{platform:'twitch',text:'https://evil.com/a'});return false;}catch{return true;}}),true);
+ const safe=await app.evaluate(({BrowserWindow})=>{const p=BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences();return {contextIsolation:p.contextIsolation,nodeIntegration:p.nodeIntegration,sandbox:p.sandbox};});
+ assert.deepEqual(safe,{contextIsolation:true,nodeIntegration:false,sandbox:true});
+ const secureVault=await app.evaluate(({safeStorage})=>{if(!safeStorage.isEncryptionAvailable()||safeStorage.getSelectedStorageBackend?.()==='basic_text')return 'unavailable';const encrypted=safeStorage.encryptString('synthetic-test-no-credentials');return safeStorage.decryptString(encrypted)==='synthetic-test-no-credentials'&&!encrypted.toString().includes('synthetic-test-no-credentials');});
+ assert.notEqual(secureVault,false);
+ assert.deepEqual(errors,[]);
+ console.log(JSON.stringify({desktop:true,ipc:true,configuration:true,security:safe,secureVault,jsErrors:errors}));
+}finally{if(app)await app.close();await fs.rm(taskData,{recursive:true,force:true});}
